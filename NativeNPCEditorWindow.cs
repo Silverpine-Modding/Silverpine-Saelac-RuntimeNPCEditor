@@ -767,15 +767,25 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
     {
         bool canToggleSave =
             DynamicRelationshipBridge.CanToggleCurrentSave;
+        bool canToggleCrossFactionRumors =
+            DynamicRelationshipBridge.CanToggleCrossFactionRumors;
         bool saveEnabled =
             DynamicRelationshipBridge.IsEnabledForCurrentSave;
         bool globallyEnabled =
             DynamicRelationshipBridge.IsGloballyEnabled;
+        bool hasHeaderControls =
+            canToggleSave || canToggleCrossFactionRumors;
+        bool hasBothHeaderControls =
+            canToggleSave && canToggleCrossFactionRumors;
         CreatePageText("Dynamic NPC Relationships",
-            canToggleSave
+            hasBothHeaderControls
+                ? new Vector2(-135f, 305f)
+                : hasHeaderControls
                 ? new Vector2(15f, 305f)
                 : new Vector2(150f, 305f),
-            canToggleSave
+            hasBothHeaderControls
+                ? new Vector2(430f, 42f)
+                : hasHeaderControls
                 ? new Vector2(580f, 42f)
                 : new Vector2(850f, 42f),
             27);
@@ -785,37 +795,65 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
                 saveEnabled
                     ? "Save-wide System: On"
                     : "Save-wide System: Off",
-                new Vector2(465f, 305f), new Vector2(285f, 42f),
+                hasBothHeaderControls
+                    ? new Vector2(190f, 305f)
+                    : new Vector2(465f, 305f),
+                hasBothHeaderControls
+                    ? new Vector2(220f, 42f)
+                    : new Vector2(285f, 42f),
                 ToggleDynamicSystemForCurrentSave);
+        }
+        if (canToggleCrossFactionRumors)
+        {
+            CreatePageButton(
+                DynamicRelationshipBridge.CrossFactionRumorsEnabled
+                    ? "Cross-Faction Rumors: On"
+                    : "Cross-Faction Rumors: Off",
+                new Vector2(455f, 305f), new Vector2(290f, 42f),
+                ToggleCrossFactionRumors);
         }
 
         if (!saveEnabled)
         {
             bool hasSaveData =
                 DynamicRelationshipBridge.HasCurrentSaveData;
+            string disabledMessage = hasSaveData
+                ? "Dynamic Relationships is disabled for this save. "
+                    + "Its existing relationship progress is retained "
+                    + "and no scoring, decay, prompts, proposals, or "
+                    + "dynamic title changes will run until it is "
+                    + "enabled again."
+                : "Dynamic Relationships has not been enabled for this "
+                    + "save or committed by a game save. New saves begin "
+                    + "disabled, and no per-run relationship JSON is "
+                    + "created until the save-wide system is enabled and "
+                    + "the player saves the game.";
+            if (canToggleCrossFactionRumors)
+            {
+                disabledMessage += " The Cross-Faction Rumors control is "
+                    + "independent and remains available while relationship "
+                    + "progression is disabled.";
+            }
             CreatePageText(
-                hasSaveData
-                    ? "Dynamic Relationships is disabled for this save. "
-                        + "Its existing relationship progress is retained "
-                        + "and no scoring, decay, prompts, proposals, or "
-                        + "dynamic title changes will run until it is "
-                        + "enabled again."
-                    : "Dynamic Relationships has not been enabled for this "
-                        + "save or committed by a game save. New saves begin "
-                        + "disabled, and no per-run relationship JSON is "
-                        + "created until the save-wide system is enabled and "
-                        + "the player saves the game.",
+                disabledMessage,
                 new Vector2(150f, 80f), new Vector2(850f, 250f), 23);
             return;
         }
 
         if (!globallyEnabled)
         {
-            CreatePageText(
+            string globallyDisabledMessage =
                 "This save's Dynamic Relationships toggle is on, but the "
-                    + "BepInEx General.Enabled master switch is off. Saved "
-                    + "progress is retained, but the system will remain "
-                    + "inactive until the master switch is enabled.",
+                + "BepInEx General.Enabled master switch is off. Saved "
+                + "progress is retained, but the system will remain "
+                + "inactive until the master switch is enabled.";
+            if (canToggleCrossFactionRumors)
+            {
+                globallyDisabledMessage += " The Cross-Faction Rumors "
+                    + "control remains independent.";
+            }
+            CreatePageText(
+                globallyDisabledMessage,
                 new Vector2(150f, 80f), new Vector2(850f, 250f), 23);
             return;
         }
@@ -993,6 +1031,22 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
             : "Dynamic Relationships enabled for this save, but the global "
                 + "BepInEx master switch remains off. Save the game to "
                 + "persist the save-wide setting.";
+    }
+
+    private void ToggleCrossFactionRumors()
+    {
+        bool enable =
+            !DynamicRelationshipBridge.CrossFactionRumorsEnabled;
+        bool changed =
+            DynamicRelationshipBridge.SetCrossFactionRumorsEnabled(enable);
+        ShowTab(EditorTab.DynamicRelationships);
+        status.text = changed
+            ? enable
+                ? "Cross-faction rumor targeting enabled. This applies "
+                    + "even while Dynamic Relationships progression is off."
+                : "Cross-faction rumor targeting disabled; Silverpine's "
+                    + "same-faction rule is active."
+            : "The cross-faction rumor setting could not be changed.";
     }
 
     private void SavePlayerRelationship()
