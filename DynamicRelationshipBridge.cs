@@ -66,31 +66,6 @@ internal static class DynamicRelationshipBridge
         }
     }
 
-    internal static bool CanToggleCrossFactionRumors => FindMethod(
-        "SetCrossFactionRumorBypassEnabled") != null;
-
-    internal static bool CrossFactionRumorsEnabled => InvokeBooleanMethod(
-        "IsCrossFactionRumorBypassEnabled", fallback: false);
-
-    internal static bool SetCrossFactionRumorsEnabled(bool enabled)
-    {
-        MethodInfo? method = FindMethod(
-            "SetCrossFactionRumorBypassEnabled");
-        if (method == null)
-            return false;
-        try
-        {
-            return method.Invoke(null, new object?[] { enabled })
-                is bool changed && changed;
-        }
-        catch (Exception exception)
-        {
-            Plugin.Log.LogWarning(
-                "Cross-faction rumor toggle failed: " + exception);
-            return false;
-        }
-    }
-
     private static Type? GetPluginType() =>
         Type.GetType(PluginTypeName, throwOnError: false)
         ?? AccessTools.TypeByName("DynamicNPCRelationships.Plugin");

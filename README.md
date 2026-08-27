@@ -5,7 +5,7 @@ traits, and the destination/activity fields of their existing routines. Version
 2 uses native Silverpine button, font, input-field, transition, and scaling
 templates instead of IMGUI.
 
-**Current version:** 2.12.0
+**Current version:** 2.12.1
 
 The complete developer-facing save and prompt integration map is in
 [INJECTION_POINTS.md](./INJECTION_POINTS.md).
@@ -117,13 +117,7 @@ dedicated **Dynamic** tab. Its save-wide toggle starts off for a new run;
 Dynamic Relationships creates no per-run relationship JSON until that toggle
 is enabled and the player saves the game. Disabling it later retains existing
 progress in the JSON. Dynamic-tab changes take effect immediately in memory but
-are written to that JSON only by Silverpine's next game save. The tab then
-provides a **Cross-Faction Rumors** toggle backed directly by Dynamic
-Relationships' BepInEx CFG. Unlike relationship progression, the rumor override
-remains active when the save-wide system or its global master switch is off.
-The CFG toggle is available on the Dynamic tab before a save has ever enabled
-relationship progression and does not create a per-run relationship JSON.
-The tab also
+are written to that JSON only by Silverpine's next game save. The tab also
 displays each managed pair's saved stage,
 score, direct interaction count, next promotion review, configured
 Friend/Lover/Married promotion and retention thresholds, and suspension state. It also
