@@ -109,13 +109,24 @@ Custom NPC slots are not persistence keys. A custom NPC may move between
 `ApplyNpcOverride` directly handles:
 
 - personality traits;
-- numeric player relationship level, daily cap, and total cap;
 - knowledge-definition synchronization;
 - symmetric NPC-to-NPC relationship tiers and custom labels.
 
 It does not directly replace the final description string, player relationship
 title prompt text, or future routine objects. Those values are enforced at
 their game consumption points below.
+
+As of 2.12.2, numeric player relationship values are written only by the
+explicit one-time Apply button (and the optional cap-repair button). They are
+not part of `ApplyNpcOverride`, save-load replay, or knowledge synchronization.
+The base game's `NeuralNPC.Serialize/Deserialize` persists these fields when
+the player saves. `NormalizeSave` disables legacy `playerRelationshipEnabled`
+flags, retaining the old recorded numbers solely as reference data.
+
+The original-knowledge cache is keyed by definition instance. A run-ID change
+restores the cached originals before the new run is applied. Word-cloud
+generation snapshots its iteration lists and validates the active save and
+entry ownership again after inference; stale results are discarded.
 
 ## Description injection
 
@@ -167,9 +178,8 @@ the placeholders unchanged.
 
 ## Player relationship title injection
 
-The custom player title is independent of
-`playerRelationshipEnabled`. Disabling the numeric relationship override does
-not disable the title.
+The custom player title is independent of numeric player edits. Migration of
+the obsolete `playerRelationshipEnabled` flag does not disable the title.
 
 Two prompt points enforce the title:
 

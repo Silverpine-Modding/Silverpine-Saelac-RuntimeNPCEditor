@@ -25,7 +25,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "renegadex.silverpine.runtimenpceditor";
     public const string PluginName = "Runtime NPC Editor";
-    public const string PluginVersion = "2.12.1";
+    public const string PluginVersion = "2.12.2";
 
     internal static Plugin Instance = null!;
     internal static ManualLogSource Log = null!;
@@ -41,7 +41,7 @@ public sealed class Plugin : BaseUnityPlugin
     private static readonly Dictionary<string, Dictionary<string, NPCRoutine>>
         ObservedRoutines = new();
     private static RoutineCatalogDatabase RoutineCatalog = new();
-    private static readonly Dictionary<string,
+    private static readonly Dictionary<CustomContentDefinition_NPC,
         List<CustomContentDefinition_NPC.KnowledgeEntry>>
         OriginalKnowledge = new();
     private sealed class RoutineIdentity
@@ -55,6 +55,9 @@ public sealed class Plugin : BaseUnityPlugin
     private ModToolSession? modToolsSession;
     private NativeNPCEditorWindow? editorWindow;
     private bool generatingKnowledgeWordClouds;
+    private SaveOverrides? pendingKnowledgeSave;
+    private readonly HashSet<string> unreadableSaveFiles =
+        new(StringComparer.OrdinalIgnoreCase);
     private int observedLoadedNpcCount = -1;
     private int deferredOverrideApplyPasses;
     private float nextDeferredOverrideApplyTime;
@@ -262,11 +265,14 @@ public sealed class Plugin : BaseUnityPlugin
         SaveOverrides save)
     {
         if (generatingKnowledgeWordClouds)
+        {
+            pendingKnowledgeSave = save;
             return;
+        }
         generatingKnowledgeWordClouds = true;
         try
         {
-            foreach (KeyValuePair<string, NpcOverride> npcPair in save.npcs)
+            foreach (KeyValuePair<string, NpcOverride> npcPair in save.npcs.ToArray())
             {
                 foreach (KnowledgeOverride entry in npcPair.Value.knowledge
                              .Where(item => item.wordCloudDirty
@@ -274,12 +280,15 @@ public sealed class Plugin : BaseUnityPlugin
                                      && (item.entryName.Contains(
                                              "%PLAYER_NAME%")
                                          || item.lore.Contains(
-                                             "%PLAYER_NAME%")))))
+                                             "%PLAYER_NAME%")))).ToArray())
                 {
                     try
                     {
-                        if (InferenceServerSetupHandler.Instance == null)
+                        if (!IsActiveKnowledgeSave(save)
+                            || InferenceServerSetupHandler.Instance == null)
                             return;
+                        if (!npcPair.Value.knowledge.Contains(entry))
+                            continue;
                         string npcName = npcPair.Key.StartsWith(
                             "custom:", StringComparison.Ordinal)
                             ? npcPair.Key.Substring("custom:".Length)
@@ -297,13 +306,21 @@ public sealed class Plugin : BaseUnityPlugin
                                     word,
                                     npcName,
                                     StringComparison.OrdinalIgnoreCase));
+                        // A save switch, deletion, or replacement while awaiting
+                        // inference must not update a different save/NPC/entry.
+                        if (!IsActiveKnowledgeSave(save))
+                            return;
+                        if (!save.npcs.TryGetValue(npcPair.Key, out NpcOverride active)
+                            || !ReferenceEquals(active, npcPair.Value)
+                            || !active.knowledge.Contains(entry))
+                            continue;
                         entry.nouns = cloud.nouns;
                         entry.verbs = cloud.verbs;
                         entry.adjectives = cloud.adjectives;
                         entry.keywords = cloud.keywords;
                         entry.wordCloudDirty = false;
                         entry.playerNameResolvedInWordCloud = true;
-                        SaveDatabase();
+                        WriteSaveFile(save.saveInfo.runId, save);
                         ApplyKnowledgeForStorageKey(
                             npcPair.Key, npcPair.Value);
                     }
@@ -321,8 +338,19 @@ public sealed class Plugin : BaseUnityPlugin
         finally
         {
             generatingKnowledgeWordClouds = false;
+            SaveOverrides? pending = pendingKnowledgeSave;
+            pendingKnowledgeSave = null;
+            if (pending != null && IsActiveKnowledgeSave(pending))
+                _ = GeneratePendingKnowledgeWordClouds(pending);
         }
     }
+
+    private static bool IsActiveKnowledgeSave(SaveOverrides save) =>
+        Player.Instance != null && SaveUI.Instance != null && RunIdField != null
+        && ReferenceEquals(CurrentSave, save)
+        && !string.IsNullOrEmpty(save.saveInfo.runId)
+        && string.Equals(RunIdField.GetValue(SaveUI.Instance) as string,
+            save.saveInfo.runId, StringComparison.Ordinal);
 
     private static void ApplyKnowledgeForStorageKey(
         string storageKey,
@@ -362,6 +390,11 @@ public sealed class Plugin : BaseUnityPlugin
             return;
         }
 
+        // Definitions can survive a save switch. Remove this run's inserted
+        // knowledge before another run uses those same definition instances.
+        foreach (var original in OriginalKnowledge)
+            original.Key.knowledgeEntries = original.Value.DeepClone();
+        OriginalKnowledge.Clear();
         currentRunId = runId;
         observedLoadedNpcCount = -1;
         deferredOverrideApplyPasses = 8;
@@ -394,8 +427,6 @@ public sealed class Plugin : BaseUnityPlugin
         }
 
         CurrentSave = activeSave;
-        if (!ReferenceEquals(Instance, null))
-            Instance.currentRunId = runId;
         return activeSave.npcs.TryGetValue(storageKey, out data);
     }
 
@@ -417,15 +448,8 @@ public sealed class Plugin : BaseUnityPlugin
         {
             npc.personalityTraits = data.personalityTraits;
         }
-        if (data.playerRelationshipEnabled)
-        {
-            npc.relationshipLevel = Mathf.Clamp(
-                data.playerRelationshipLevel, 0, 100);
-            npc.relationshipLevelDailyCap = Mathf.Clamp(
-                data.playerRelationshipDailyCap, 0, 100);
-            npc.relationshipLevelTotalCap = Mathf.Clamp(
-                data.playerRelationshipTotalCap, 0, 100);
-        }
+        // Numeric player relationships are one-time edits to native save
+        // state. Never replay them during loading or prompt synchronization.
         ApplyKnowledgeOverrides(npc, data);
         ApplyNpcRelationshipOverrides(npc, data);
     }
@@ -454,11 +478,11 @@ public sealed class Plugin : BaseUnityPlugin
             // description, routine, and relationship fields must stay disabled.
             return;
         }
-        if (!OriginalKnowledge.ContainsKey(name))
-            OriginalKnowledge[name] = definition.knowledgeEntries.DeepClone();
+        if (!OriginalKnowledge.ContainsKey(definition))
+            OriginalKnowledge[definition] = definition.knowledgeEntries.DeepClone();
 
         definition.knowledgeEntries =
-            OriginalKnowledge[name].DeepClone();
+            OriginalKnowledge[definition].DeepClone();
         foreach (KnowledgeOverride edited in data.knowledge)
         {
             var runtimeEntry =
@@ -472,9 +496,8 @@ public sealed class Plugin : BaseUnityPlugin
                 edited.adjectives.ToList();
             runtimeEntry.wordCloud.keywords = edited.keywords.ToList();
             int existingIndex = definition.knowledgeEntries.FindIndex(
-                entry => string.Equals(
-                    entry.entryName, edited.entryName,
-                    StringComparison.OrdinalIgnoreCase));
+                entry => KnowledgeNamesMatch(
+                    entry.entryName, edited.entryName, name));
             if (existingIndex >= 0)
                 definition.knowledgeEntries[existingIndex] = runtimeEntry;
             else
@@ -488,15 +511,21 @@ public sealed class Plugin : BaseUnityPlugin
         definition.enabled
         && (npc.IsCustomNPC() || definition.overrideExisting);
 
-    private static string ResolvePlayerName(string value) =>
-        value.Replace(
-            "%PLAYER_NAME%",
-            Player.Instance != null ? Player.Instance.playerName : "");
+    internal static List<CustomContentDefinition_NPC.KnowledgeEntry>
+        GetOriginalKnowledge(CustomContentDefinition_NPC definition) =>
+        OriginalKnowledge.TryGetValue(definition, out var entries)
+            ? entries : definition.knowledgeEntries;
+
+    internal static bool KnowledgeNamesMatch(
+        string first, string second, string npcName) =>
+        EditorDataRules.KnowledgeNamesMatch(first, second,
+            Player.Instance != null ? Player.Instance.playerName : "", npcName);
 
     private static string ResolveKnowledgeVariables(
         string value,
         string npcName) =>
-        ResolvePlayerName(value).Replace("%NAME%", npcName);
+        EditorDataRules.ResolveKnowledgeVariables(value,
+            Player.Instance != null ? Player.Instance.playerName : "", npcName);
 
     internal static void ApplyNpcRelationshipOverrides(
         NeuralNPC npc,
@@ -526,7 +555,7 @@ public sealed class Plugin : BaseUnityPlugin
     internal static string GetPlayerRelationshipTitleStatement(
         NeuralNPC npc)
     {
-        if (!TryGetActiveOverride(
+        if (npc == null || Player.Instance == null || !TryGetActiveOverride(
                 GetNpcStorageKey(npc), out NpcOverride data)
             || string.IsNullOrWhiteSpace(data.playerRelationshipTitle))
         {
@@ -585,6 +614,28 @@ public sealed class Plugin : BaseUnityPlugin
         RoutineIdentities.Add(
             routine,
             new RoutineIdentity { Key = CreateRoutineKey(routine) });
+    }
+
+    internal static void RecoverSavedRoutineIdentity(
+        NeuralNPC? npc, NPCRoutine? routine)
+    {
+        if (npc == null || routine == null
+            || !TryGetActiveOverride(GetNpcStorageKey(npc), out NpcOverride data)
+            || data.routines.ContainsKey(CreateRoutineKey(routine)))
+            return;
+        // ID-less routines serialize the edited activity text. Recover their
+        // original key only if the stored edited fields identify one override.
+        var matches = data.routines.Where(pair =>
+            pair.Value.targetX == routine.targetPosition.x
+            && pair.Value.targetY == routine.targetPosition.y
+            && pair.Value.pathingActivity == routine.pathingActivity
+            && pair.Value.activity == routine.activity
+            && pair.Value.visibleActivity == routine.visibleActivity).ToArray();
+        if (matches.Length != 1)
+            return;
+        RoutineIdentities.Remove(routine);
+        RoutineIdentities.Add(routine,
+            new RoutineIdentity { Key = matches[0].Key });
     }
 
     internal static void ObserveRoutine(
@@ -833,7 +884,7 @@ public sealed class Plugin : BaseUnityPlugin
         {
             Directory.CreateDirectory(
                 Path.GetDirectoryName(RoutineCatalogPath));
-            File.WriteAllText(
+            AtomicFile.WriteAllText(
                 RoutineCatalogPath,
                 JsonConvert.SerializeObject(
                     RoutineCatalog,
@@ -915,7 +966,9 @@ public sealed class Plugin : BaseUnityPlugin
     {
         Instance.RefreshSaveIdentity(createIfMissing: true);
         Instance.UpdateCurrentSaveMetadata();
-        Instance.SaveDatabase();
+        // Unlike background persistence, a user action must surface failure
+        // instead of displaying a success message after an unsuccessful write.
+        Instance.WriteSaveFile(Instance.currentRunId, CurrentSave);
     }
 
     private void UpdateCurrentSaveMetadata()
@@ -979,7 +1032,15 @@ public sealed class Plugin : BaseUnityPlugin
         try
         {
             Directory.CreateDirectory(SavesDirectory);
-            MigrateLegacyDatabase();
+            try
+            {
+                MigrateLegacyDatabase();
+            }
+            catch (Exception exception)
+            {
+                Log.LogError("Could not migrate legacy overrides; continuing "
+                    + "to load per-save files: " + exception);
+            }
             foreach (string path in Directory.GetFiles(
                          SavesDirectory, "*.json", SearchOption.TopDirectoryOnly))
             {
@@ -998,6 +1059,7 @@ public sealed class Plugin : BaseUnityPlugin
                 }
                 catch (Exception exception)
                 {
+                    unreadableSaveFiles.Add(Path.GetFullPath(path));
                     Log.LogError(
                         $"Could not load save override file '{path}': "
                         + exception);
@@ -1080,8 +1142,13 @@ public sealed class Plugin : BaseUnityPlugin
         Directory.CreateDirectory(SavesDirectory);
         save = NormalizeSave(save);
         save.saveInfo.runId = runId;
-        File.WriteAllText(
-            GetSavePath(runId),
+        string path = GetSavePath(runId);
+        if (unreadableSaveFiles.Contains(Path.GetFullPath(path)))
+            throw new InvalidDataException(
+                "Refusing to overwrite an unreadable override file: " + path
+                + ". Repair or restore it from backup and restart the game.");
+        AtomicFile.WriteAllText(
+            path,
             JsonConvert.SerializeObject(save, Formatting.Indented));
     }
 
@@ -1099,6 +1166,21 @@ public sealed class Plugin : BaseUnityPlugin
     {
         save.saveInfo ??= new SaveInfo();
         save.npcs ??= new Dictionary<string, NpcOverride>();
+        // Disable legacy numeric locks. Old numbers remain only in JSON;
+        // the UI reads live NPC values and background hooks never replay them.
+        foreach (NpcOverride npc in save.npcs.Values)
+        {
+            if (npc == null || npc.knowledge == null || npc.relationships == null
+                || npc.routines == null || npc.publicDescription == null
+                || npc.privateDescription == null || npc.personalityTraits == null
+                || npc.knowledge.Any(entry => entry == null || entry.entryName == null
+                    || entry.lore == null || entry.nouns == null || entry.verbs == null
+                    || entry.adjectives == null || entry.keywords == null)
+                || npc.relationships.Values.Any(relation => relation == null)
+                || npc.routines.Values.Any(routine => routine == null))
+                throw new InvalidDataException("An NPC override contains null data.");
+            npc.playerRelationshipEnabled = false;
+        }
         return save;
     }
 
@@ -1293,6 +1375,8 @@ internal static class ActiveRoutineDeserializePatch
     private static void RememberLoadedActiveBaseRoutine(
         NPCRoutineExecutor __instance)
     {
+        Plugin.RecoverSavedRoutineIdentity(
+            __instance.neuralNPC, __instance.currentRoutine);
         Plugin.ObserveActiveBaseRoutine(
             __instance, __instance.currentRoutine);
         if (__instance.neuralNPC != null

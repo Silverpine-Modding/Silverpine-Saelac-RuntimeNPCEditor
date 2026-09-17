@@ -5,7 +5,7 @@ traits, and the destination/activity fields of their existing routines. Version
 2 uses native Silverpine button, font, input-field, transition, and scaling
 templates instead of IMGUI.
 
-**Current version:** 2.12.1
+**Current version:** 2.12.2
 
 The complete developer-facing save and prompt integration map is in
 [INJECTION_POINTS.md](./INJECTION_POINTS.md).
@@ -108,9 +108,25 @@ before conditional lore is selected. Silverpine's normal word-cloud and
 relevance logic determines which entries appear in each conversation prompt;
 the plugin does not force entries that the selector omitted.
 
-The **Relationships** tab edits the selected NPC's player relationship level,
-daily cap, and total cap, plus NPC-to-NPC relationship tiers and optional
-custom prompt labels. NPC-to-NPC tier changes are applied symmetrically because
+The **Relationships** tab sets the selected NPC's player relationship level,
+daily cap, and total cap **once** when **Apply Player Values Once** is clicked.
+All three values then follow the game's normal progression. Conversations,
+save loading, and other editor actions never replay these numeric edits.
+**Save the game** to persist them; the editor JSON is not their save mechanism.
+The fields show current live values. Total cap is a dropdown containing the
+four native stages: **14, 49, 79, 100**. Daily cap is an absolute ceiling, not
+a daily increment; the game normally resets it to current level + 10 each day.
+
+Upgrading disables numeric locks from older editor versions automatically,
+without resetting the values already in the game save. **Restore Normal
+Progression** is an optional repair button for old/custom caps: it preserves
+the current level and custom title, sets the daily ceiling to level + 10, and
+sets the total ceiling to the native stage for that level. It cannot recover
+historical values because older versions never recorded them. Save the game
+after using it. This button is not required after a normal one-time edit.
+
+The tab also edits NPC-to-NPC relationship tiers and optional custom prompt
+labels. NPC-to-NPC tier changes are applied symmetrically because
 the base game expects both sides of a relationship to agree.
 When Dynamic NPC Relationships is installed, Runtime NPC Editor adds a
 dedicated **Dynamic** tab. Its save-wide toggle starts off for a new run;
@@ -135,14 +151,29 @@ is absent. Older Dynamic Relationships versions without the state-edit bridge
 remain readable but do not show the edit controls.
 
 Saving a manual relationship on the normal Relationships tab suspends dynamic
-control of that pair. Removing the manual override resumes it. This integration
+control of that pair. **Remove NPC Pair Override** removes saved enforcement
+in both directions and resumes dynamic control when available. Without a
+dynamic controller, current native values remain; this is not a historical
+undo of values already saved by the game. This integration
 uses reflection, so Runtime NPC Editor retains no hard assembly dependency on
 Dynamic NPC Relationships.
 The player can also be given an independent custom relationship title (for
 example, ward, mentor, spouse, or sworn sibling). This changes prompt wording
-without enabling or changing the numeric player relationship override. The
+without enabling or changing the numeric player relationship values. The
 title is injected through the final knowledge/prompt path so other relationship
 patches cannot overwrite it.
+
+## Reliability and review
+
+Per-save override files and the routine catalog are written by atomic
+replacement, with the previous complete file retained as `.bak`. A per-save
+file that failed to load will not be overwritten with a new empty scope.
+Repair/restore that file and restart the game to re-enable saving its overrides.
+An unreadable legacy combined database does not prevent valid per-save files
+from loading.
+
+The full source review, fixed findings, remaining limitations, and manual
+in-game checks are recorded in [CODE_REVIEW_2.12.2.md](./CODE_REVIEW_2.12.2.md).
 
 ## Credits
 

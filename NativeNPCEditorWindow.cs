@@ -71,6 +71,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
     private int selectedRoutine;
     private int selectedKnowledge;
     private int selectedRelationship;
+    private NeuralNPC? relationshipTarget;
     private int knowledgePage;
     private int relationshipPage;
     private bool knowledgeIsPublic;
@@ -88,7 +89,9 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
     private TMP_InputField? knowledgeLore;
     private TMP_InputField? playerRelationshipLevel;
     private TMP_InputField? playerRelationshipDailyCap;
-    private TMP_InputField? playerRelationshipTotalCap;
+    private Button? playerRelationshipTotalCap;
+    private GameObject? totalCapDropdown;
+    private int selectedPlayerTotalCap;
     private TMP_InputField? playerRelationshipTitle;
     private TMP_InputField? customRelationshipName;
     private TMP_InputField? dynamicRelationshipScore;
@@ -98,6 +101,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
     private string dynamicRelationshipStage = "";
     private bool dynamicRelationshipTierLocked;
     private bool dynamicRelationshipHasEnemies;
+    private Action? finishWorldSelection;
 
     internal static NativeNPCEditorWindow Create(
         InventoryUI inventory,
@@ -118,14 +122,22 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
 
         NativeNPCEditorWindow window =
             root.AddComponent<NativeNPCEditorWindow>();
-        window.inventory = inventory;
-        window.close = close;
-        window.buttonTemplate = template;
-        window.inputTemplate = input;
-        window.font = template
-            .GetComponentInChildren<TextMeshProUGUI>(true).font;
-        window.Build();
-        return window;
+        try
+        {
+            window.inventory = inventory;
+            window.close = close;
+            window.buttonTemplate = template;
+            window.inputTemplate = input;
+            window.font = template
+                .GetComponentInChildren<TextMeshProUGUI>(true).font;
+            window.Build();
+            return window;
+        }
+        catch
+        {
+            Destroy(root);
+            throw;
+        }
     }
 
     internal void BringToFront() => transform.SetAsLastSibling();
@@ -133,7 +145,20 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
     internal void Dispose()
     {
         if (this != null && gameObject != null)
+        {
+            StopAllCoroutines();
+            CompleteWorldSelection();
             Destroy(gameObject);
+        }
+    }
+
+    private void OnDestroy() => CompleteWorldSelection();
+
+    private void CompleteWorldSelection()
+    {
+        Action? finish = finishWorldSelection;
+        finishWorldSelection = null;
+        finish?.Invoke();
     }
 
     private void Build()
@@ -422,7 +447,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
                 out CustomContentDefinition_NPC definition)
             && Plugin.IsNativeKnowledgeDefinitionActive(npc, definition))
         {
-            result.AddRange(definition.knowledgeEntries.Select(entry =>
+            result.AddRange(Plugin.GetOriginalKnowledge(definition).Select(entry =>
                 new KnowledgeOverride
                 {
                     entryName = entry.entryName,
@@ -438,9 +463,9 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
         }
         foreach (KnowledgeOverride edited in GetNpcData().knowledge)
         {
-            int existingIndex = result.FindIndex(entry => string.Equals(
-                entry.entryName, edited.entryName,
-                StringComparison.OrdinalIgnoreCase));
+            int existingIndex = result.FindIndex(entry =>
+                Plugin.KnowledgeNamesMatch(
+                    entry.entryName, edited.entryName, npc!.GetFinalName()));
             if (existingIndex >= 0)
                 result[existingIndex] = edited;
             else
@@ -550,8 +575,8 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
                     entry.entryName, selectedKnowledgeOriginalName,
                     StringComparison.OrdinalIgnoreCase));
             string lore = knowledgeLore!.text.Trim();
-            bool textChanged =
-                previous == null || previous.lore != lore;
+            bool textChanged = EditorDataRules.KnowledgeTextChanged(
+                previous?.entryName, previous?.lore, name, lore);
             data.knowledge.RemoveAll(entry => string.Equals(
                 entry.entryName, selectedKnowledgeOriginalName,
                 StringComparison.OrdinalIgnoreCase)
@@ -620,14 +645,18 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
         knowledgeLore!.text = "";
         selectedKnowledgeOriginalName = "";
         knowledgeIsPublic = false;
+        RefreshKnowledgeVisibilityButton();
         status.text = "Enter a name and knowledge text, then save.";
     }
 
     private void RemoveKnowledgeEntry()
     {
         List<KnowledgeOverride> entries = GetKnowledgeEntries();
-        if (entries.Count == 0)
+        if (!EditorDataRules.IsSavedSelection(selectedKnowledge, entries.Count))
+        {
+            status.text = "Select a saved [MOD] entry before deleting.";
             return;
+        }
         string name = entries[selectedKnowledge].entryName;
         int removed = GetNpcData().knowledge.RemoveAll(
             entry => string.Equals(
@@ -665,19 +694,19 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
             new Vector2(-300f, 255f), new Vector2(140f, 48f), false);
         playerRelationshipDailyCap = CreatePageInput(
             new Vector2(-145f, 255f), new Vector2(140f, 48f), false);
-        playerRelationshipTotalCap = CreatePageInput(
-            new Vector2(10f, 255f), new Vector2(140f, 48f), false);
-        playerRelationshipLevel.text = (data.playerRelationshipEnabled
-            ? data.playerRelationshipLevel : npc!.relationshipLevel).ToString();
-        playerRelationshipDailyCap.text = (data.playerRelationshipEnabled
-            ? data.playerRelationshipDailyCap
-            : npc!.relationshipLevelDailyCap).ToString();
-        playerRelationshipTotalCap.text = (data.playerRelationshipEnabled
-            ? data.playerRelationshipTotalCap
-            : npc!.relationshipLevelTotalCap).ToString();
-        CreatePageButton("Save Player Values",
-            new Vector2(-145f, 195f), new Vector2(240f, 48f),
+        selectedPlayerTotalCap = npc!.relationshipLevelTotalCap;
+        playerRelationshipTotalCap = CreatePageButton(
+            selectedPlayerTotalCap + " v",
+            new Vector2(10f, 255f), new Vector2(140f, 48f),
+            ToggleTotalCapDropdown);
+        playerRelationshipLevel.text = npc!.relationshipLevel.ToString();
+        playerRelationshipDailyCap.text = npc.relationshipLevelDailyCap.ToString();
+        CreatePageButton("Apply Player Values Once",
+            new Vector2(-145f, 195f), new Vector2(355f, 48f),
             SavePlayerRelationship);
+        CreatePageButton("Restore Normal Progression",
+            new Vector2(-145f, 137f), new Vector2(355f, 42f),
+            RestorePlayerRelationshipProgression);
         CreatePageText("Custom Relationship Title",
             new Vector2(300f, 245f), new Vector2(450f, 32f), 19);
         playerRelationshipTitle = CreatePageInput(
@@ -688,6 +717,8 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
             SavePlayerRelationshipTitle);
 
         List<NeuralNPC> targets = GetNpcs().Where(other => other != npc).ToList();
+        if (relationshipTarget != null && targets.Contains(relationshipTarget))
+            selectedRelationship = targets.IndexOf(relationshipTarget);
         selectedRelationship = Mathf.Clamp(
             selectedRelationship, 0, Mathf.Max(0, targets.Count - 1));
         int relationshipPages =
@@ -708,6 +739,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
                 () =>
                 {
                     selectedRelationship = captured;
+                    relationshipTarget = target;
                     ShowTab(EditorTab.Relationships);
                 });
             relationshipButtons.Add(button);
@@ -727,6 +759,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
         if (targets.Count == 0)
             return;
         NeuralNPC selectedTarget = targets[selectedRelationship];
+        relationshipTarget = selectedTarget;
         string targetKey = Plugin.GetNpcStorageKey(selectedTarget);
         RelationshipOverride relation;
         if (!data.relationships.TryGetValue(targetKey, out relation))
@@ -758,7 +791,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
         CreatePageButton("Save NPC Relationship",
             new Vector2(245f, -145f), new Vector2(300f, 48f),
             () => SaveNpcRelationship(false));
-        CreatePageButton("Remove Relationship Override",
+        CreatePageButton("Remove NPC Pair Override",
             new Vector2(245f, -210f), new Vector2(330f, 48f),
             RemoveNpcRelationship);
     }
@@ -830,6 +863,8 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
         CreatePageText("Select another NPC",
             new Vector2(-325f, 255f), new Vector2(380f, 34f), 20);
 
+        if (relationshipTarget != null && targets.Contains(relationshipTarget))
+            selectedRelationship = targets.IndexOf(relationshipTarget);
         selectedRelationship = Mathf.Clamp(
             selectedRelationship, 0, Mathf.Max(0, targets.Count - 1));
         int pages = Mathf.Max(1, Mathf.CeilToInt(targets.Count / 8f));
@@ -848,6 +883,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
                 () =>
                 {
                     selectedRelationship = captured;
+                    relationshipTarget = target;
                     ShowTab(EditorTab.DynamicRelationships);
                 });
             relationshipButtons.Add(button);
@@ -869,6 +905,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
             return;
 
         NeuralNPC selectedTarget = targets[selectedRelationship];
+        relationshipTarget = selectedTarget;
         CreatePageText(
             npc!.GetFinalName() + " + " + selectedTarget.GetFinalName(),
             new Vector2(245f, 235f), new Vector2(550f, 45f), 25);
@@ -999,23 +1036,83 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
                 + "persist the save-wide setting.";
     }
 
+    private void ToggleTotalCapDropdown()
+    {
+        if (totalCapDropdown != null)
+        {
+            totalCapDropdown.SetActive(!totalCapDropdown.activeSelf);
+            totalCapDropdown.transform.SetAsLastSibling();
+            return;
+        }
+
+        // A native-styled dropdown with a click-away surface. Only the four
+        // native cap stages are selectable; no typing or cycling is required.
+        RectTransform root = CreatePanel(content, "TotalCapDropdown",
+            Vector2.zero, new Vector2(1110f, 760f));
+        totalCapDropdown = root.gameObject;
+        pageObjects.Add(totalCapDropdown);
+        Image backdrop = root.gameObject.AddComponent<Image>();
+        backdrop.color = Color.clear;
+        Button dismiss = root.gameObject.AddComponent<Button>();
+        dismiss.targetGraphic = backdrop;
+        dismiss.transition = Selectable.Transition.None;
+        dismiss.onClick.AddListener(() => root.gameObject.SetActive(false));
+        IReadOnlyList<int> values = EditorDataRules.TotalCaps;
+        for (int index = 0; index < values.Count; index++)
+        {
+            int value = values[index];
+            CreateButton(root, value.ToString(),
+                new Vector2(10f, 198f - index * 46f),
+                new Vector2(180f, 44f), () =>
+                {
+                    selectedPlayerTotalCap = value;
+                    SetButtonLabel(playerRelationshipTotalCap!, value + " v");
+                    root.gameObject.SetActive(false);
+                });
+        }
+    }
+
     private void SavePlayerRelationship()
     {
         if (!int.TryParse(playerRelationshipLevel!.text, out int level)
-            || !int.TryParse(playerRelationshipDailyCap!.text, out int daily)
-            || !int.TryParse(playerRelationshipTotalCap!.text, out int total))
+            || !int.TryParse(playerRelationshipDailyCap!.text, out int daily))
         {
             status.text = "Relationship values must be whole numbers.";
             return;
         }
+        int total = selectedPlayerTotalCap;
+        if (!EditorDataRules.ValidatePlayerValues(level, daily, total,
+                out string error))
+        {
+            status.text = error;
+            return;
+        }
         NpcOverride data = GetNpcData();
-        data.playerRelationshipEnabled = true;
-        data.playerRelationshipLevel = Mathf.Clamp(level, 0, 100);
-        data.playerRelationshipDailyCap = Mathf.Clamp(daily, 0, 100);
-        data.playerRelationshipTotalCap = Mathf.Clamp(total, 0, 100);
-        Plugin.ApplyNpcOverride(npc!);
+        data.playerRelationshipEnabled = false;
+        data.playerRelationshipLevel = level;
+        data.playerRelationshipDailyCap = daily;
+        data.playerRelationshipTotalCap = total;
+        npc!.relationshipLevel = level;
+        npc.relationshipLevelDailyCap = daily;
+        npc.relationshipLevelTotalCap = total;
         Plugin.Commit();
-        status.text = "Player relationship values saved and applied.";
+        ShowTab(EditorTab.Relationships);
+        status.text = "Applied once; normal progression continues. Save the game to keep these values.";
+    }
+
+    private void RestorePlayerRelationshipProgression()
+    {
+        GetNpcData().playerRelationshipEnabled = false;
+        // Older releases did not record original caps. Reconstruct the native
+        // stage from the current level (the game's legacy-save migration rule).
+        // Keep both the player's earned level and the separate title intact.
+        npc!.relationshipLevelDailyCap =
+            EditorDataRules.NormalDailyCap(npc.relationshipLevel);
+        npc.relationshipLevelTotalCap =
+            EditorDataRules.NormalTotalCap(npc.relationshipLevel);
+        Plugin.Commit();
+        ShowTab(EditorTab.Relationships);
+        status.text = "Level kept; caps reset for its game stage. Save the game to keep this change.";
     }
 
     private void SavePlayerRelationshipTitle()
@@ -1031,13 +1128,12 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
 
     private void SaveNpcRelationship(bool refreshOnly)
     {
-        List<NeuralNPC> targets = GetNpcs().Where(other => other != npc).ToList();
-        if (targets.Count == 0)
+        if (!TryGetRelationshipTarget(out NeuralNPC target))
             return;
         if (!refreshOnly)
         {
-            NeuralNPC target = targets[selectedRelationship];
             DynamicRelationshipBridge.NotifyExternalOverride(npc!, target);
+            RemoveStoredPairOverrides(target);
             GetNpcData().relationships[Plugin.GetNpcStorageKey(target)] =
                 new RelationshipOverride
                 {
@@ -1053,25 +1149,46 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
 
     private void RemoveNpcRelationship()
     {
-        List<NeuralNPC> targets = GetNpcs().Where(other => other != npc).ToList();
-        if (targets.Count == 0)
+        if (!TryGetRelationshipTarget(out NeuralNPC target))
             return;
-        NeuralNPC target = targets[selectedRelationship];
-        GetNpcData().relationships.Remove(Plugin.GetNpcStorageKey(target));
+        RemoveStoredPairOverrides(target);
         Plugin.Commit();
         bool resumed = DynamicRelationshipBridge.Resume(npc!, target);
         ShowTab(EditorTab.Relationships);
         status.text = resumed
             ? "Relationship override removed; dynamic progression resumed."
-            : "Relationship override removed; reload restores save data.";
+            : "Pair override removed; current game values are retained.";
     }
+
+    private bool TryGetRelationshipTarget(out NeuralNPC target)
+    {
+        target = relationshipTarget!;
+        if (npc != null && target != null && target != npc
+            && GetNpcs().Contains(target))
+            return true;
+        status.text = "The selected NPC is no longer available. Select a pair again.";
+        return false;
+    }
+
+    private void RemoveStoredPairOverrides(NeuralNPC target)
+    {
+        string firstKey = Plugin.GetNpcStorageKey(npc!);
+        string secondKey = Plugin.GetNpcStorageKey(target);
+        GetNpcData().relationships.Remove(secondKey);
+        if (Plugin.CurrentSave.npcs.TryGetValue(secondKey, out NpcOverride other))
+            other.relationships.Remove(firstKey);
+    }
+
+    private bool HasStoredPairOverride(NeuralNPC target) =>
+        GetNpcData().relationships.ContainsKey(Plugin.GetNpcStorageKey(target))
+        || (Plugin.CurrentSave.npcs.TryGetValue(
+                Plugin.GetNpcStorageKey(target), out NpcOverride other)
+            && other.relationships.ContainsKey(Plugin.GetNpcStorageKey(npc!)));
 
     private void ResetDynamicRelationship()
     {
-        List<NeuralNPC> targets = GetNpcs().Where(other => other != npc).ToList();
-        if (targets.Count == 0)
+        if (!TryGetRelationshipTarget(out NeuralNPC target))
             return;
-        NeuralNPC target = targets[selectedRelationship];
         bool reset = DynamicRelationshipBridge.Reset(npc!, target);
         ShowTab(EditorTab.DynamicRelationships);
         status.text = reset
@@ -1122,12 +1239,8 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
             return;
         }
 
-        List<NeuralNPC> targets = GetNpcs()
-            .Where(other => other != npc)
-            .ToList();
-        if (targets.Count == 0)
+        if (!TryGetRelationshipTarget(out NeuralNPC target))
             return;
-        NeuralNPC target = targets[selectedRelationship];
         DynamicRelationshipSnapshot? snapshot =
             DynamicRelationshipBridge.TryGetSnapshot(npc!, target);
         if (snapshot == null)
@@ -1159,10 +1272,13 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
 
     private void ResumeDynamicRelationship()
     {
-        List<NeuralNPC> targets = GetNpcs().Where(other => other != npc).ToList();
-        if (targets.Count == 0)
+        if (!TryGetRelationshipTarget(out NeuralNPC target))
             return;
-        NeuralNPC target = targets[selectedRelationship];
+        if (HasStoredPairOverride(target))
+        {
+            status.text = "Remove the NPC Pair Override on the Relationships tab first.";
+            return;
+        }
         bool resumed = DynamicRelationshipBridge.Resume(npc!, target);
         ShowTab(EditorTab.DynamicRelationships);
         status.text = resumed
@@ -1172,10 +1288,13 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
 
     private void BeginDynamicRelationship()
     {
-        List<NeuralNPC> targets = GetNpcs().Where(other => other != npc).ToList();
-        if (targets.Count == 0)
+        if (!TryGetRelationshipTarget(out NeuralNPC target))
             return;
-        NeuralNPC target = targets[selectedRelationship];
+        if (HasStoredPairOverride(target))
+        {
+            status.text = "Remove the NPC Pair Override on the Relationships tab first.";
+            return;
+        }
         bool began = DynamicRelationshipBridge.Begin(npc!, target);
         ShowTab(EditorTab.DynamicRelationships);
         status.text = began
@@ -1298,6 +1417,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
 
         if (CustomContentDefinition_NPC.loaded.TryGetValue(
                 npc.GetFinalName(), out CustomContentDefinition_NPC definition)
+            && Plugin.IsNativeKnowledgeDefinitionActive(npc, definition)
             && definition.possibleRoutines.Count > 0)
         {
             foreach (NPCRoutine source in definition.possibleRoutines)
@@ -1405,6 +1525,17 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
             return;
         }
         RoutineChoice choice = routines[selectedRoutine];
+        if (choice.Active)
+        {
+            NPCRoutineExecutor? activeExecutor = npc!.GetComponent<NPCRoutineExecutor>();
+            if (activeExecutor == null
+                || !ReferenceEquals(activeExecutor.currentRoutine, choice.Routine))
+            {
+                ShowTab(EditorTab.Routines);
+                status.text = "The active routine changed. Select it again before editing.";
+                return;
+            }
+        }
         string key = Plugin.GetRoutineKey(choice.Routine);
         NpcOverride npcData = GetNpcData();
         if (!npcData.routines.TryGetValue(
@@ -1505,6 +1636,12 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
 
         NPCRoutineExecutor executor =
             npc!.GetComponent<NPCRoutineExecutor>();
+        if (executor == null
+            || !ReferenceEquals(executor.currentRoutine, choice.Routine))
+        {
+            status.text = "Override removed; the NPC has already moved to another routine.";
+            return;
+        }
         if (executor.IsCurrentRoutineOverrideRoutine())
         {
             status.text = "Override removed. Immediate restoration was "
@@ -1519,7 +1656,7 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
 
     private void BeginWorldTileSelection()
     {
-        if (targetX == null || targetY == null)
+        if (targetX == null || targetY == null || finishWorldSelection != null)
             return;
         StartCoroutine(SelectWorldTileCoroutine());
     }
@@ -1532,96 +1669,108 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
         group.blocksRaycasts = false;
         bool modToolsWorldInput =
             Silverpine.ModdingTools.InventoryModTools.BeginWorldInput();
-        if (!modToolsWorldInput && PauseMenuManager.Instance != null
-            && PauseMenuManager.Instance.open)
+        bool pauseWasOpen = PauseMenuManager.Instance != null
+            && PauseMenuManager.Instance.open;
+        finishWorldSelection = () => RestoreAfterWorldSelection(
+            group, modToolsWorldInput, pauseWasOpen);
+        try
         {
-            PauseMenuManager.Instance.Close();
+            if (!modToolsWorldInput && PauseMenuManager.Instance != null
+                && PauseMenuManager.Instance.open)
+            {
+                PauseMenuManager.Instance.Close();
+            }
+            UpperNotificationUI.Instance.OneOff(
+                "Click a loaded world tile for the routine destination. "
+                + "Press Escape to cancel.");
+
+            // Let the button release and pause-menu transition finish first.
+            yield return null;
+            yield return null;
+            yield return null;
+
+            while (true)
+            {
+                if (Input.GetKeyDown(KeyCode.Escape))
+                {
+                    UpperNotificationUI.Instance.OneOff(
+                        "Routine destination selection cancelled.");
+                    yield break;
+                }
+                if (!Input.GetKeyUp(KeyCode.Mouse0))
+                {
+                    yield return null;
+                    continue;
+                }
+
+                Camera camera = Camera.main;
+                if (camera == null && Player.Instance != null)
+                {
+                    Transform cameraTransform =
+                        Player.Instance.transform.Find("Main Camera");
+                    if (cameraTransform != null)
+                        camera = cameraTransform.GetComponent<Camera>();
+                }
+                if (camera == null)
+                {
+                    camera = Camera.allCameras.FirstOrDefault(
+                        candidate =>
+                            candidate != null
+                            && candidate.isActiveAndEnabled);
+                }
+                if (camera == null)
+                {
+                    UpperNotificationUI.Instance.OneOff(
+                        "No active world camera was found.");
+                    yield break;
+                }
+
+                Vector3 world =
+                    camera.ScreenToWorldPoint(Input.mousePosition);
+                Vector2Int tile = Vector2Int.RoundToInt(
+                    new Vector2(world.x, world.y));
+                if (!Turfs.IsValidTurf(tile))
+                {
+                    UpperNotificationUI.Instance.OneOff(
+                        $"No loaded world tile exists at {tile.x}, {tile.y}. "
+                        + "Try again or press Escape.");
+                    yield return null;
+                    continue;
+                }
+
+                targetX!.text = tile.x.ToString();
+                targetY!.text = tile.y.ToString();
+                status.text =
+                    $"Selected routine destination {tile.x}, {tile.y}.";
+                yield break;
+            }
         }
-        UpperNotificationUI.Instance.OneOff(
-            "Click a loaded world tile for the routine destination. "
-            + "Press Escape to cancel.");
-
-        // Let the button release and pause-menu transition finish first.
-        yield return null;
-        yield return null;
-        yield return null;
-
-        while (true)
+        finally
         {
-            if (Input.GetKeyDown(KeyCode.Escape))
-            {
-                UpperNotificationUI.Instance.OneOff(
-                    "Routine destination selection cancelled.");
-                RestoreAfterWorldSelection(group, modToolsWorldInput);
-                yield break;
-            }
-            if (!Input.GetKeyUp(KeyCode.Mouse0))
-            {
-                yield return null;
-                continue;
-            }
-
-            Camera camera = Camera.main;
-            if (camera == null && Player.Instance != null)
-            {
-                Transform cameraTransform =
-                    Player.Instance.transform.Find("Main Camera");
-                if (cameraTransform != null)
-                    camera = cameraTransform.GetComponent<Camera>();
-            }
-            if (camera == null)
-            {
-                camera = Camera.allCameras.FirstOrDefault(
-                    candidate =>
-                        candidate != null
-                        && candidate.isActiveAndEnabled);
-            }
-            if (camera == null)
-            {
-                UpperNotificationUI.Instance.OneOff(
-                    "No active world camera was found.");
-                RestoreAfterWorldSelection(group, modToolsWorldInput);
-                yield break;
-            }
-
-            Vector3 world =
-                camera.ScreenToWorldPoint(Input.mousePosition);
-            Vector2Int tile = Vector2Int.RoundToInt(
-                new Vector2(world.x, world.y));
-            if (!Turfs.IsValidTurf(tile))
-            {
-                UpperNotificationUI.Instance.OneOff(
-                    $"No loaded world tile exists at {tile.x}, {tile.y}. "
-                    + "Try again or press Escape.");
-                yield return null;
-                continue;
-            }
-
-            targetX!.text = tile.x.ToString();
-            targetY!.text = tile.y.ToString();
-            status.text =
-                $"Selected routine destination {tile.x}, {tile.y}.";
-            RestoreAfterWorldSelection(group, modToolsWorldInput);
-            yield break;
+            CompleteWorldSelection();
         }
     }
 
     private static void RestoreAfterWorldSelection(
         CanvasGroup group,
-        bool modToolsWorldInput)
+        bool modToolsWorldInput,
+        bool pauseWasOpen)
     {
         if (modToolsWorldInput)
         {
             Silverpine.ModdingTools.InventoryModTools.EndWorldInput();
         }
-        else if (PauseMenuManager.Instance != null
+        else if (pauseWasOpen && PauseMenuManager.Instance != null
             && !PauseMenuManager.Instance.open)
         {
             PauseMenuManager.Instance.Toggle();
         }
-        group.alpha = 1f;
-        group.interactable = true;
-        group.blocksRaycasts = true;
+        if (group != null)
+        {
+            group.alpha = 1f;
+            group.interactable = true;
+            group.blocksRaycasts = true;
+        }
     }
 
     private void ClearPage()
@@ -1634,6 +1783,8 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
         knowledgeButtons.Clear();
         relationshipButtons.Clear();
         knowledgeVisibilityButton = null;
+        totalCapDropdown = null;
+        playerRelationshipTotalCap = null;
         publicDescription = null;
         privateDescription = null;
         personality = null;
@@ -1708,7 +1859,19 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
             worldPositionStays: false);
         button.name = "NPCEditor_" + label.Replace(" ", "");
         button.onClick = new Button.ButtonClickedEvent();
-        button.onClick.AddListener(() => callback());
+        button.onClick.AddListener(() =>
+        {
+            try
+            {
+                callback();
+            }
+            catch (Exception exception)
+            {
+                Plugin.Log.LogError("NPC Editor action failed: " + exception);
+                if (status != null)
+                    status.text = "Editor action failed; changes may not be saved. See the BepInEx log.";
+            }
+        });
         // InventoryUI.useButton is a visual template, but its interactable
         // state reflects the currently selected inventory item. Editor-owned
         // clones must not inherit that gameplay state.
