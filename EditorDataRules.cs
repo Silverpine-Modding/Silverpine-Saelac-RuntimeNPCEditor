@@ -33,12 +33,6 @@ internal static class EditorDataRules
         return true;
     }
 
-    internal static int NormalTotalCap(int level) =>
-        level > 79 ? 100 : level > 49 ? 79 : level > 14 ? 49 : 14;
-
-    internal static int NormalDailyCap(int level) =>
-        Math.Clamp(level, 0, 100) + 10;
-
     internal static string ResolveKnowledgeVariables(
         string value, string playerName, string npcName) =>
         value.Replace("%PLAYER_NAME%", playerName).Replace("%NAME%", npcName);

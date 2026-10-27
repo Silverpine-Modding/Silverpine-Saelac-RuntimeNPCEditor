@@ -25,7 +25,7 @@ public sealed class Plugin : BaseUnityPlugin
 {
     public const string PluginGuid = "renegadex.silverpine.runtimenpceditor";
     public const string PluginName = "Runtime NPC Editor";
-    public const string PluginVersion = "2.12.2";
+    public const string PluginVersion = "2.12.3";
 
     internal static Plugin Instance = null!;
     internal static ManualLogSource Log = null!;

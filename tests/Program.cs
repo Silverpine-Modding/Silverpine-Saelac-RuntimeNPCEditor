@@ -13,9 +13,6 @@ Check(EditorDataRules.TotalCaps.SequenceEqual(new[] { 14, 49, 79, 100 }),
     "Dropdown must contain exactly the native total-cap stages.");
 foreach (int level in Enumerable.Range(0, 101))
 {
-    int expected = level >= 80 ? 100 : level >= 50 ? 79 : level >= 15 ? 49 : 14;
-    Check(EditorDataRules.NormalTotalCap(level) == expected, "Incorrect reset tier.");
-    Check(EditorDataRules.NormalDailyCap(level) == level + 10, "Incorrect daily reset.");
     foreach (int cap in EditorDataRules.TotalCaps)
         Check(EditorDataRules.ValidatePlayerValues(level, level + 10, cap, out _),
             "Valid native values rejected.");
@@ -79,11 +76,10 @@ var writes = methods.SelectMany(method => method.Body.Instructions
         && field.DeclaringType.FullName == "NeuralNPC"
         && new[] { "relationshipLevel", "relationshipLevelDailyCap", "relationshipLevelTotalCap" }
             .Contains(field.Name)).Select(i => (method, field: (FieldReference)i.Operand))).ToArray();
-Check(writes.Length == 5, "Expected three one-time writes and two explicit cap-repair writes.");
+Check(writes.Length == 3, "Expected only the three explicit one-time player-value writes.");
 Check(writes.All(write => write.method.DeclaringType.Name == "NativeNPCEditorWindow"
-    && (write.method.Name == "SavePlayerRelationship"
-        || write.method.Name == "RestorePlayerRelationshipProgression")),
-    "A background hook can overwrite native relationship progress.");
+    && write.method.Name == "SavePlayerRelationship"),
+    "A code path other than explicit Apply can overwrite native relationship progress.");
 Check(writes.Count(write => write.field.Name == "relationshipLevel") == 1,
     "A reset or background hook can overwrite the player's earned level.");
 foreach (var method in methods)
@@ -98,6 +94,8 @@ Check(normalize.Body.Instructions.Any(i => i.OpCode == OpCodes.Stfld
     && i.Operand is FieldReference f && f.Name == "playerRelationshipEnabled"),
     "Legacy numeric locks are not disabled on load.");
 var window = types.Single(t => t.Name == "NativeNPCEditorWindow");
+Check(!window.Methods.Any(method => method.Name == "RestorePlayerRelationshipProgression"),
+    "The retired repair action must not be present.");
 Check(window.Fields.Single(f => f.Name == "playerRelationshipTotalCap").FieldType.Name == "Button",
     "Total cap regressed to a free-text input.");
 Console.WriteLine($"PASS: {checks} checks (native numeric rules, knowledge identity, atomic files, compiled relationship write paths).");

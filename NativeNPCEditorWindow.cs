@@ -704,9 +704,6 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
         CreatePageButton("Apply Player Values Once",
             new Vector2(-145f, 195f), new Vector2(355f, 48f),
             SavePlayerRelationship);
-        CreatePageButton("Restore Normal Progression",
-            new Vector2(-145f, 137f), new Vector2(355f, 42f),
-            RestorePlayerRelationshipProgression);
         CreatePageText("Custom Relationship Title",
             new Vector2(300f, 245f), new Vector2(450f, 32f), 19);
         playerRelationshipTitle = CreatePageInput(
@@ -1098,21 +1095,6 @@ internal sealed class NativeNPCEditorWindow : MonoBehaviour
         Plugin.Commit();
         ShowTab(EditorTab.Relationships);
         status.text = "Applied once; normal progression continues. Save the game to keep these values.";
-    }
-
-    private void RestorePlayerRelationshipProgression()
-    {
-        GetNpcData().playerRelationshipEnabled = false;
-        // Older releases did not record original caps. Reconstruct the native
-        // stage from the current level (the game's legacy-save migration rule).
-        // Keep both the player's earned level and the separate title intact.
-        npc!.relationshipLevelDailyCap =
-            EditorDataRules.NormalDailyCap(npc.relationshipLevel);
-        npc.relationshipLevelTotalCap =
-            EditorDataRules.NormalTotalCap(npc.relationshipLevel);
-        Plugin.Commit();
-        ShowTab(EditorTab.Relationships);
-        status.text = "Level kept; caps reset for its game stage. Save the game to keep this change.";
     }
 
     private void SavePlayerRelationshipTitle()

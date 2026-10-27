@@ -5,7 +5,7 @@ traits, and the destination/activity fields of their existing routines. Version
 2 uses native Silverpine button, font, input-field, transition, and scaling
 templates instead of IMGUI.
 
-**Current version:** 2.12.2
+**Current version:** 2.12.3
 
 The complete developer-facing save and prompt integration map is in
 [INJECTION_POINTS.md](./INJECTION_POINTS.md).
@@ -118,12 +118,10 @@ four native stages: **14, 49, 79, 100**. Daily cap is an absolute ceiling, not
 a daily increment; the game normally resets it to current level + 10 each day.
 
 Upgrading disables numeric locks from older editor versions automatically,
-without resetting the values already in the game save. **Restore Normal
-Progression** is an optional repair button for old/custom caps: it preserves
-the current level and custom title, sets the daily ceiling to level + 10, and
-sets the total ceiling to the native stage for that level. It cannot recover
-historical values because older versions never recorded them. Save the game
-after using it. This button is not required after a normal one-time edit.
+without resetting the values already in the game save. The temporary repair
+button from 2.12.2 is removed in 2.12.3; no repair action is needed to stop the
+old reset bug. Use the one-time Apply button for any further manual changes,
+then save the game to keep them.
 
 The tab also edits NPC-to-NPC relationship tiers and optional custom prompt
 labels. NPC-to-NPC tier changes are applied symmetrically because
@@ -172,8 +170,8 @@ Repair/restore that file and restart the game to re-enable saving its overrides.
 An unreadable legacy combined database does not prevent valid per-save files
 from loading.
 
-The full source review, fixed findings, remaining limitations, and manual
-in-game checks are recorded in [CODE_REVIEW_2.12.2.md](./CODE_REVIEW_2.12.2.md).
+The full source review for 2.12.2, fixed findings, remaining limitations, and
+manual in-game checks are recorded in [CODE_REVIEW_2.12.2.md](./CODE_REVIEW_2.12.2.md).
 
 ## Credits
 

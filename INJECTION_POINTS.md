@@ -116,8 +116,8 @@ It does not directly replace the final description string, player relationship
 title prompt text, or future routine objects. Those values are enforced at
 their game consumption points below.
 
-As of 2.12.2, numeric player relationship values are written only by the
-explicit one-time Apply button (and the optional cap-repair button). They are
+As of 2.12.3, numeric player relationship values are written only by the
+explicit one-time Apply button. The temporary 2.12.2 repair button is removed. They are
 not part of `ApplyNpcOverride`, save-load replay, or knowledge synchronization.
 The base game's `NeuralNPC.Serialize/Deserialize` persists these fields when
 the player saves. `NormalizeSave` disables legacy `playerRelationshipEnabled`
